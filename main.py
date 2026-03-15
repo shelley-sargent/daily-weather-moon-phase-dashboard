@@ -1,6 +1,6 @@
 import asyncio
 import random
-from datetime import datetime, date, time as dtime
+from datetime import datetime
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from moon.dialamoon import Moon
@@ -20,9 +20,11 @@ HEIGHT = 600
 TODAYS_MOON_PATH = BASE_DIR / "todays_moon.png"
 SIGIL_IMAGE = BASE_DIR / "sigil.png"
 
+
 def get_quote():
     with open("quotes.txt", "r") as f:
         return random.choice(f.readlines()).strip().capitalize()
+
 
 # ---- Moon helpers ----
 def phase_name_from_fraction(frac: float) -> str:
@@ -38,8 +40,9 @@ def phase_name_from_fraction(frac: float) -> str:
         return "Full Moon"
     elif frac < 0.75:
         return "Waning Gibbous"
-    elif frac < 0.95:
+    else:
         return "Waning Crescent"
+
 
 def compute_moon_phase_name_for_seattle() -> str:
     # change lat and lon to your location
@@ -55,6 +58,7 @@ def compute_moon_phase_name_for_seattle() -> str:
     print(f"Phase Name: {name}")
     return name
 
+
 def todays_moon_image():
     # set the moon image
     moon = Moon()
@@ -62,19 +66,19 @@ def todays_moon_image():
     moon.save_to_disk("todays_moon")
 
     # keeps things consistent if the library writes to .jpg
-    if os.path.exists("todays_moon") and not os.path.exists(TODAYS_MOON_PATH):
-        os.rename("todays_moon", TODAYS_MOON_PATH)
-    elif os.path.exists("todays_moon.jpg") and not os.path.exists(TODAYS_MOON_PATH):
-        os.rename("todays_moon.jpg", TODAYS_MOON_PATH)
+    if os.path.exists("todays_moon"):
+        os.replace("todays_moon", TODAYS_MOON_PATH)
+    elif os.path.exists("todays_moon.jpg"):
+        os.replace("todays_moon.jpg", TODAYS_MOON_PATH)
 
-def prep_moon(path: str, size: int) -> Image.Image:
-    moon_img = Image.open(path).convert("L")
-    # Inverts moon image so it's more e-ink friendly (black on white background)
-    moon_img = ImageOps.invert(moon_img)
-    moon_img = ImageOps.autocontrast(moon_img, cutoff=1)
-    moon_img = moon_img.resize((size, size), Image.Resampling.LANCZOS)
-    return moon_img
-
+# ---- Image helper ----
+def prep_image(path: str, target_size: tuple[int, int], invert: bool = False) -> Image.Image:
+    img = Image.open(path).convert("L")
+    if invert:
+        img = ImageOps.invert(img)
+    img = ImageOps.autocontrast(img, cutoff=1)
+    img = img.resize(target_size, Image.Resampling.LANCZOS)
+    return img
 
 # ---- Weather helpers ----
 
@@ -87,27 +91,18 @@ def format_hourly_table(hourly_weather: list[tuple[str, str, str]], rows: int = 
     data = [(t, temp, cond) for (t, temp, cond) in hourly_weather[:rows]]
 
     # Column widths (dynamic, but bounded so it stays tidy)
-    t_w = max(4, min(6, max((len(t) for t,_,_ in data), default=4)))
-    temp_w = max(3, min(4, max((len(temp) for _,temp,_ in data), default=3)))
-    cond_w = max(5, min(12, max((len(cond) for *_,cond in data), default=5)))
+    t_w = 6
+    temp_w = 4
+    cond_w = 8
 
     header = f"{'Time':<{t_w}}  {'Temp':>{temp_w}}  {'Cond':<{cond_w}}"
-    sep    = f"{'-'*t_w}  {'-'*temp_w}  {'-'*cond_w}"
+    sep = f"{'-' * t_w}  {'-' * temp_w}  {'-' * cond_w}"
 
     lines = [header, sep]
     for t, temp, cond in data:
         cond = cond[:cond_w]
         lines.append(f"{t:<{t_w}}  {temp:>{temp_w}}  {cond:<{cond_w}}")
     return lines
-
-def kind_to_short(kind) -> str:
-    # cleans up and shortens weather labels
-    s = str(kind).split(".")[-1].replace("_", " ").title()
-    return {
-        "Very Cloudy": "Cloudy",
-        "Partly Cloudy": "Partly",
-        "Light Rain": "Rain",
-    }.get(s, s)
 
 async def get_hourly_weather(city: str = "Seattle") -> list[tuple[str, str, str]]:
     async with python_weather.Client(unit=python_weather.IMPERIAL) as client:
@@ -125,34 +120,16 @@ async def get_hourly_weather(city: str = "Seattle") -> list[tuple[str, str, str]
 
         return hourlies
 
-# ---- Sigil helpers ----
-def prep_sigil_image(path: str, target_size: tuple[int, int], invert_if_needed: bool = False) -> Image.Image:
-    """
-    Loads an image as grayscale (L), boosts contrast, resizes.
-    If your source is black on white and you want white on black (or vice versa), use invert_if_needed.
-    """
-    img = Image.open(path).convert("L")
-    img = ImageOps.autocontrast(img, cutoff=1)
-    if invert_if_needed:
-        img = ImageOps.invert(img)
-    img = img.resize(target_size, Image.Resampling.LANCZOS)
-    return img
-
-def paste_with_mask(dst: Image.Image, src: Image.Image, xy: tuple[int, int]):
-    # Turn white -> transparent mask (white = 0 mask) helps for e-ink
-    mask = ImageOps.invert(src)  # black becomes white mask, white becomes black mask
-    dst.paste(src, xy, mask)
-
 # ---- Dashboard renderer ----
-def generate_main_image(moon_phase: str, quote: str, hourly_weather: list[tuple[str, str, str]], sigil_img_path) -> Image.Image:
+def generate_main_image(moon_phase: str, quote: str, hourly_weather: list[tuple[str, str, str]],
+                        sigil_img_path) -> Image.Image:
     img = Image.new("L", (WIDTH, HEIGHT), 255)
     draw = ImageDraw.Draw(img)
 
     # Fonts (note the leading /)
-    title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 48)
-    body_font  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf", 32)
+    body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf", 32)
     small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf", 20)
-    mono_font  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 18)
+    mono_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 18)
 
     # Layout constants
     right_bar_x = WIDTH - 70
@@ -162,7 +139,7 @@ def generate_main_image(moon_phase: str, quote: str, hourly_weather: list[tuple[
 
     # Date
     date_str = datetime.now().strftime("%A, %B %d")
-    draw.text((WIDTH/2, top_pad + 10), date_str, font=body_font, fill=0, anchor="mm")
+    draw.text((WIDTH / 2, top_pad + 10), date_str, font=body_font, fill=0, anchor="mm")
 
     # Right bar + label
     draw.line([(right_bar_x, top_pad + 10), (right_bar_x, HEIGHT - top_pad - 10)], fill=0, width=3)
@@ -171,22 +148,17 @@ def generate_main_image(moon_phase: str, quote: str, hourly_weather: list[tuple[
     ld = ImageDraw.Draw(label_img)
     ld.text((110, 30), label, font=small_font, fill=0, anchor="mm")
     label_img = label_img.rotate(90, expand=True)
-    img.paste(label_img, (right_bar_x + 10, HEIGHT//2 - label_img.size[1]//2))
+    img.paste(label_img, (right_bar_x + 10, HEIGHT // 2 - label_img.size[1] // 2))
 
     # Moon circle + moon image
-    circle_center = (WIDTH//2 - 80, HEIGHT//2 - 40)
+    circle_center = (WIDTH // 2 - 80, HEIGHT // 2 - 40)
     radius = 120
-    circle_bbox = (
-        circle_center[0] - radius, circle_center[1] - radius,
-        circle_center[0] + radius, circle_center[1] + radius
-    )
 
-
-    moon_size = int(radius * 2.5)
+    moon_size = (int(radius * 2.5), int(radius * 2.5))
     try:
-        moon_img = prep_moon(TODAYS_MOON_PATH, moon_size)
-        x = circle_center[0] - moon_size // 2 - 100
-        y = circle_center[1] - moon_size // 2
+        moon_img = prep_image(TODAYS_MOON_PATH, moon_size, True)
+        x = circle_center[0] - moon_size[0] // 2 - 100
+        y = circle_center[1] - moon_size[1] // 2
         img.paste(moon_img, (x, y))
     except FileNotFoundError:
         draw.text(circle_center, "moon\nmissing", font=small_font, fill=0, anchor="mm")
@@ -222,18 +194,20 @@ def generate_main_image(moon_phase: str, quote: str, hourly_weather: list[tuple[
         lines.append(current)
 
     quote_text = "\n".join(lines[:4])
-    draw.multiline_text((WIDTH/2 - 10, quote_box_top + 70), quote_text, font=small_font, fill=0, spacing=6, anchor="mm", align="center")
-
+    draw.multiline_text((WIDTH / 2 - 10, quote_box_top + 70), quote_text, font=small_font, fill=0, spacing=6,
+                        anchor="mm", align="center")
 
     # sigil placed at the corner where the two lines meet (bottom line + right bar)
     if sigil_img_path:
         try:
             sigil_size = 250  # adjust to taste
-            sigil = prep_sigil_image(sigil_img_path, (sigil_size, sigil_size), invert_if_needed=False)
+            sigil = prep_image(sigil_img_path, (sigil_size, sigil_size), invert=False)
             # Place it slightly inset so it looks intentional
             sx = right_bar_x - 60 - sigil_size // 2
             sy = HEIGHT - 170 - sigil_size // 2
-            paste_with_mask(img, sigil, (sx, sy))
+            # Turn white -> transparent mask (white = 0 mask) helps for e-ink
+            mask = ImageOps.invert(sigil)  # black becomes white mask, white becomes black mask
+            img.paste(sigil, (sx,sy), mask)
         except FileNotFoundError:
             pass
 
